@@ -24,27 +24,40 @@
 #define mainGENERIC_PRIORITY (tskIDLE_PRIORITY)
 #define mainGENERIC_STACK_SIZE ((unsigned short)2560)
 
-#define TRI_PEEK_X SCREEN_WIDTH / 2
-#define TRI_PEEK_Y SCREEN_HEIGHT / 2
+#define PI 3.1415926
+// rad per ms
+#define ROTATION_SPEED PI / 2000
+#define ROTATION_RADIUS 40
+
 #define TRI_HEIGHT 20
 #define TRI_BOTTOM 20
+#define TRI_PEEK_X SCREEN_WIDTH / 2
+#define TRI_PEEK_Y SCREEN_HEIGHT / 2 - TRI_HEIGHT / 2 + 50
 
 // the initial center point 
-#define CIR_INITIAL_X (SCREEN_WIDTH / 2 - 25)
-#define CIR_INITIAL_Y SCREEN_WIDTH / 2 
-#define CIR_RADIUS 20
+#define CIR_INITIAL_X (SCREEN_WIDTH / 2 - ROTATION_RADIUS)
+#define CIR_INITIAL_Y SCREEN_HEIGHT / 2 + 50
+#define CIR_RADIUS 10
 
 // the initial center point 
-#define SQU_INITIAL_X (SCREEN_WIDTH / 2 + 25)
-#define SQU_INITIAL_Y SCREEN_WIDTH / 2 
+#define SQU_INITIAL_X (SCREEN_WIDTH / 2 + ROTATION_RADIUS)
+#define SQU_INITIAL_Y SCREEN_HEIGHT / 2 + 50
 #define SQU_LENGTH 20
+
+//by pixel
+#define MOVING_TEXT_RANGE 200
+//pixel per ms
+#define MOVING_TEXT_SPEED 0.1
 
 #define FPS (TickType_t)50
 
 #define KEYCODE(CHAR) SDL_SCANCODE_##CHAR
 #define PRINT_TASK_ERROR(task) PRINT_ERROR("Failed to print task ##task");
 
+#define MOVE_WITH_MOUSE 1
+
 static TaskHandle_t Task1 = NULL;
+// static TaskHandle_t Task2 = NULL;
 static TaskHandle_t BufferSwap = NULL;
 
 static SemaphoreHandle_t DrawSignal = NULL;
@@ -55,7 +68,19 @@ typedef struct buttons_buffer {
     SemaphoreHandle_t lock;
 } buttons_buffer_t;
 
+typedef struct ABCDcounter {
+    short counter[4]; 
+    SemaphoreHandle_t lock;
+} ABCDcounter_t;
+
+#define A_COUNTER_POSITION 0
+#define B_COUNTER_POSITION 1
+#define C_COUNTER_POSITION 2
+#define D_COUNTER_POSITION 3
+#define NUMBER_OF_TRACED_BUTTONS 4
+
 static buttons_buffer_t buttons = { 0 };
+static ABCDcounter_t myABCDcounter = { 0 };
 
 void xGetButtonInput(void)
 {
@@ -64,7 +89,6 @@ void xGetButtonInput(void)
         xSemaphoreGive(buttons.lock);
     }
 }
-
 
 void checkDraw(unsigned char status, const char *msg)
 {
@@ -78,40 +102,273 @@ void checkDraw(unsigned char status, const char *msg)
     }
 }
 
+void moveWithMouse(signed short *x, signed short *y){
+    if ( MOVE_WITH_MOUSE ){
+        *x += (tumEventGetMouseX() - SCREEN_WIDTH / 2) / 2;
+        *y += (tumEventGetMouseY() - SCREEN_HEIGHT / 2) / 2;
+    }
+}
+
+void deMoveWithMouse(signed short *x, signed short *y){
+    if ( MOVE_WITH_MOUSE ){
+        *x -= (tumEventGetMouseX() - SCREEN_WIDTH / 2) / 2;
+        *y -= (tumEventGetMouseY() - SCREEN_HEIGHT / 2) / 2;
+    }
+}
+
+#ifdef MOVE_WITH_MOUSE
+#define MOVE_WITH_MOUSE_X(XCOORD) XCOORD + (tumEventGetMouseX() - SCREEN_WIDTH / 2) / 2
+#define MOVE_WITH_MOUSE_Y(YCOORD) YCOORD + (tumEventGetMouseY() - SCREEN_HEIGHT / 2) / 2
+#else
+#define MOVE_WITH_MOUSE_X(XCOORD) XCOORD 
+#define MOVE_WITH_MOUSE_Y(YCOORD) YCOORD 
+#endif
 
 void drawTheTriangle(void)
 {
-    coord_t peek = {TRI_PEEK_X, TRI_PEEK_Y};
-    coord_t bottomPointleft = {TRI_PEEK_X - TRI_BOTTOM / 2, 
-                                TRI_PEEK_Y + TRI_HEIGHT};
-    coord_t bottomPointright = {TRI_PEEK_X + TRI_BOTTOM / 2, 
-                                TRI_PEEK_Y + TRI_HEIGHT};
+    coord_t peek = {MOVE_WITH_MOUSE_X(TRI_PEEK_X), MOVE_WITH_MOUSE_Y(TRI_PEEK_Y)};
+    coord_t bottomPointleft = {MOVE_WITH_MOUSE_X(TRI_PEEK_X - TRI_BOTTOM / 2), 
+                                MOVE_WITH_MOUSE_Y(TRI_PEEK_Y + TRI_HEIGHT)};
+    coord_t bottomPointright = {MOVE_WITH_MOUSE_X(TRI_PEEK_X + TRI_BOTTOM / 2), 
+                                MOVE_WITH_MOUSE_Y(TRI_PEEK_Y + TRI_HEIGHT)};
     coord_t points[3] = {peek, bottomPointleft, bottomPointright};
                                     
     checkDraw(tumDrawTriangle(points, TUMBlue),
              __FUNCTION__);
-
     // tumDrawTriangle(points, TUMBlue);
 }
 
-void drawTheCircle(void)
-{
+void drawTheCircle(TickType_t initialWakeTime)
+{   
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    double daurationSinceBeginning = pdMS_TO_TICKS(xLastWakeTime - initialWakeTime);
+    double radSinceBeginning = daurationSinceBeginning * ROTATION_SPEED;
+    
+    signed short x = CIR_INITIAL_X + 
+                    (ROTATION_RADIUS - ROTATION_RADIUS * cos(radSinceBeginning));
+    signed short y = CIR_INITIAL_Y -
+                    ROTATION_RADIUS * sin(radSinceBeginning);
 
+    moveWithMouse(&x, &y);
+    checkDraw(tumDrawCircle(x, y, CIR_RADIUS, Red),
+             __FUNCTION__);
 }
 
-void drawTheSquare(void)
+void drawTheSquare(TickType_t initialWakeTime)
 {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    double daurationSinceBeginning = pdMS_TO_TICKS(xLastWakeTime - initialWakeTime);
+    double radSinceBeginning = daurationSinceBeginning * ROTATION_SPEED;
 
+    signed short x = SQU_INITIAL_X - SQU_LENGTH / 2 -
+                    (ROTATION_RADIUS - ROTATION_RADIUS * cos(radSinceBeginning));
+    signed short y = SQU_INITIAL_Y - SQU_LENGTH / 2 +
+                    ROTATION_RADIUS * sin(radSinceBeginning);
+
+    moveWithMouse(&x, &y);
+    checkDraw(tumDrawFilledBox(x, y, SQU_LENGTH, SQU_LENGTH, Green),
+             __FUNCTION__);
 }
 
 void drawTheFixedText(void)
 {
+    static char str[100] = { 0 };
+    static int text_width;
+    ssize_t prev_font_size = tumFontGetCurFontSize();
+    ssize_t current_font_size = (ssize_t)30;
 
+    tumFontSetSize(current_font_size);
+
+    sprintf(str, "I'm not supposed to move!");
+
+    if (!tumGetTextSize((char *)str, &text_width, NULL))
+        checkDraw(tumDrawText(str, 
+                              MOVE_WITH_MOUSE_X(SCREEN_WIDTH / 2 - text_width / 2),
+                              MOVE_WITH_MOUSE_Y(SCREEN_HEIGHT - current_font_size * 2), 
+                              Black),
+                  __FUNCTION__);
+
+    tumFontSetSize(prev_font_size);
 }
 
-void drawTheMovingText(void)
+void drawTheMovingText(TickType_t prevWakeTime)
 {
+    static char str[100] = { 0 };
+    static int text_width;
 
+    static signed short x = SCREEN_WIDTH / 2 - MOVING_TEXT_RANGE;
+    static signed short y = DEFAULT_FONT_SIZE * 2;
+    static char direction = 'r';
+
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    signed short increment_on_time = (xLastWakeTime - prevWakeTime) / pdMS_TO_TICKS(1);
+    
+    if (direction == 'r')
+        x += (signed short)(MOVING_TEXT_SPEED * increment_on_time);
+    else if (direction == 'l')
+        x -= (signed short)(MOVING_TEXT_SPEED * increment_on_time);
+    else
+        prints("Undefined direction!");
+
+    sprintf(str, "I'm supposed to move!");
+
+    moveWithMouse(&x, &y);
+    if (!tumGetTextSize((char *)str, &text_width, NULL)){
+        checkDraw(tumDrawText(str, x, y, Black),
+                  __FUNCTION__);
+        if (x >= SCREEN_WIDTH / 2 + MOVING_TEXT_RANGE - text_width)
+            direction = 'l';
+        else if (x <= SCREEN_WIDTH / 2 - MOVING_TEXT_RANGE)
+            direction = 'r';
+    }
+    deMoveWithMouse(&x, &y);
+}
+
+#define BEING_PRESSED 1
+#define NOT_BEING_PRESSED 0
+#define DEBOUNCE_DELAY_BY_TICK (TickType_t)10
+
+void countTheABCDs(void)
+{
+    // from lastFlipTime[0] to lastFlipTime[3] for ABCD
+    static TickType_t lastFlipTime[NUMBER_OF_TRACED_BUTTONS] = { 0 };
+    TickType_t currentTime = xTaskGetTickCount();
+
+    // from left to right stands for ABCD
+    static short lastButtonsState[NUMBER_OF_TRACED_BUTTONS] = { 0 };
+    static short buttonsState[NUMBER_OF_TRACED_BUTTONS] = { 0 };
+    short readingButtonsState[NUMBER_OF_TRACED_BUTTONS] = { 0 };
+
+    if (tumEventGetMouseLeft()) {
+        // click the left mouse button to reset the counter
+        if(xSemaphoreTake(myABCDcounter.lock, portMAX_DELAY) == pdTRUE){
+            memset(myABCDcounter.counter, 0, sizeof(short) * NUMBER_OF_TRACED_BUTTONS);
+            xSemaphoreGive(myABCDcounter.lock);
+        }
+    }
+
+    if (xSemaphoreTake(buttons.lock, 0) == pdTRUE) {
+        readingButtonsState[A_COUNTER_POSITION] = buttons.buttons[KEYCODE(A)];
+        readingButtonsState[B_COUNTER_POSITION] = buttons.buttons[KEYCODE(B)];
+        readingButtonsState[C_COUNTER_POSITION] = buttons.buttons[KEYCODE(C)];
+        readingButtonsState[D_COUNTER_POSITION] = buttons.buttons[KEYCODE(D)];
+        xSemaphoreGive(buttons.lock);
+    }
+
+    // check the button one by one
+    for (int index = 0; index < NUMBER_OF_TRACED_BUTTONS; index++) {
+        if (readingButtonsState[index] != lastButtonsState[index])
+            // means the corresponding button state changes
+            lastFlipTime[index] = currentTime;
+    }
+
+    for (int index = 0; index < NUMBER_OF_TRACED_BUTTONS; index++) { 
+        // check one by one
+        if (currentTime - lastFlipTime[index] > DEBOUNCE_DELAY_BY_TICK){ 
+            // state stay in being-changed long enough
+            if (readingButtonsState[index] != buttonsState[index]){
+                // compared with the last confirmed state
+                buttonsState[index] = readingButtonsState[index];
+                // confirm this change
+                if (buttonsState[index] == BEING_PRESSED)
+                    // if this change is from not pressed to pressed
+                    if(xSemaphoreTake(myABCDcounter.lock, portMAX_DELAY) == pdTRUE){
+                        myABCDcounter.counter[index]++;
+                        xSemaphoreGive(myABCDcounter.lock);
+                    }
+                    
+            }
+        }
+    }
+    memcpy(lastButtonsState, readingButtonsState, sizeof(short) * NUMBER_OF_TRACED_BUTTONS);
+}
+/* 
+only for the 100...000-like binary, namely only single "1"
+return -1 when there are more than one "1" in the binary
+int fastLog2(unsigned int num){
+    int round = 0;
+    for (round = 0; num & 0b1 != 1; round++)
+        num >> 1;
+    
+    if (num > 1)
+        return -1;
+    else
+        return round;
+}
+
+void countTheABCDs(void)
+{
+    // from lastFlipTime[0] to lastFlipTime[3] for ABCD
+    static TickType_t lastFlipTime[NUMBER_OF_TRACED_BUTTONS] = { 0 };
+    TickType_t currentTime = xTaskGetTickCount();
+
+    // from left to right stands for ABCD
+    static short lastButtonsState = 0b0000; 
+    static short buttonsState = 0b0000;
+    short readingButtonsState = 0b0000;
+
+    if (xSemaphoreTake(buttons.lock, 0) == pdTRUE) {
+        readingButtonsState = (buttons.buttons[KEYCODE(A)] == BEING_PRESSED) ? 0b1000 : 0 | 
+                              (buttons.buttons[KEYCODE(B)] == BEING_PRESSED) ? 0b0100 : 0 | 
+                              (buttons.buttons[KEYCODE(C)] == BEING_PRESSED) ? 0b0010 : 0 | 
+                              (buttons.buttons[KEYCODE(D)] == BEING_PRESSED) ? 0b0001 : 0 ;
+        xSemaphoreGive(buttons.lock);
+    }
+
+    if (readingButtonsState != lastButtonsState) {
+        unsigned short theChangedButtons = readingButtonsState ^ lastButtonsState;
+        for (int index = NUMBER_OF_TRACED_BUTTONS - 1; 
+            (theChangedButtons > 0) && (index >= 0); 
+            theChangedButtons >> 1) // check the button one by one
+            {
+            if (theChangedButtons & 0b1 == 1)
+                // means the corresponding button state changes
+                lastFlipTime[index] = currentTime;
+            index--;
+        }
+    }
+    short readingStateCheck = 0;
+    short stateCheck = 0;
+    for (int index = NUMBER_OF_TRACED_BUTTONS - 1; index >= 0; index--){
+        if (currentTime - lastFlipTime[index] > DEBOUNCE_DELAY_BY_TICK){
+            readingStateCheck = (0b1 << (NUMBER_OF_TRACED_BUTTONS - 1 - index)) 
+                                & readingButtonsState;
+            stateCheck = (0b1 << (NUMBER_OF_TRACED_BUTTONS - 1 - index)) 
+                                & buttonsState;                
+            if (readingStateCheck != stateCheck )
+            
+        }
+    }
+    lastButtonsState = readingButtonsState;
+} */
+
+void drawButtonCounts(void)
+{
+    static char str[100] = { 0 };
+    static int text_width;
+
+    sprintf(str, "Axis 1: %5d | Axis 2: %5d", tumEventGetMouseX(),
+            tumEventGetMouseY());
+
+    if (!tumGetTextSize((char *)str, &text_width, NULL))
+        checkDraw(tumDrawText(str, 
+                              MOVE_WITH_MOUSE_X(SCREEN_WIDTH / 2 - text_width / 2),
+                              MOVE_WITH_MOUSE_Y(DEFAULT_FONT_SIZE * 5),
+                              Skyblue), __FUNCTION__);
+
+    if (xSemaphoreTake(myABCDcounter.lock, 0) == pdTRUE) {
+        sprintf(str, "A: %d | B: %d | C: %d | D: %d",
+                myABCDcounter.counter[A_COUNTER_POSITION],
+                myABCDcounter.counter[B_COUNTER_POSITION],
+                myABCDcounter.counter[C_COUNTER_POSITION],
+                myABCDcounter.counter[D_COUNTER_POSITION]);
+        xSemaphoreGive(myABCDcounter.lock);
+       if (!tumGetTextSize((char *)str, &text_width, NULL))
+           checkDraw(tumDrawText(str, 
+                                 MOVE_WITH_MOUSE_X(SCREEN_WIDTH / 2 - text_width / 2), 
+                                 MOVE_WITH_MOUSE_Y(DEFAULT_FONT_SIZE * 7), 
+                                 Skyblue), __FUNCTION__);
+    }
 }
 
 void vSwapBuffers(void *pvParameters)
@@ -134,15 +391,56 @@ void vSwapBuffers(void *pvParameters)
     }
 }
 
-// this task is to draw the grahics and print the text
+// this task is to draw the static grahics and the static text
 void vTask1(void *pvParameters)
 {
-    /* structure to store time retrieved from Linux kernel
+    TickType_t xLastWakeTime, prevWakeTime, initialWakeTime;
+    initialWakeTime = xTaskGetTickCount();
+    xLastWakeTime = initialWakeTime;
+    prevWakeTime = xLastWakeTime;
+
+    while (1) {
+        if (DrawSignal)
+            if (xSemaphoreTake(DrawSignal, portMAX_DELAY) ==
+                pdTRUE) {
+                xLastWakeTime = xTaskGetTickCount();                
+                tumEventFetchEvents(FETCH_EVENT_BLOCK |
+                                    FETCH_EVENT_NO_GL_CHECK);
+                xGetButtonInput(); // Update global input
+                countTheABCDs(); // Update the counter
+
+                xSemaphoreTake(ScreenLock, portMAX_DELAY);
+
+                // Clear screen
+                checkDraw(tumDrawClear(White), __FUNCTION__);
+                // tumDrawClear(White);
+
+                // Draw the fixed elements
+                drawTheTriangle();
+                drawTheFixedText();
+                drawButtonCounts();
+
+                // Draw the dynamic elements
+                drawTheCircle(initialWakeTime);
+                drawTheSquare(initialWakeTime);
+                drawTheMovingText(prevWakeTime);
+                drawButtonCounts();
+
+                xSemaphoreGive(ScreenLock);
+
+                prevWakeTime = xLastWakeTime;
+            }
+    }
+}
+
+/* this task is to draw the moving elements
+void vTask2(void *pvParameters)
+{
+    structure to store time retrieved from Linux kernel
     static struct timespec the_time;
     static char our_time_string[100];
     static int our_time_strings_width = 0;
-    */
-
+    
     while (1) {
         if (DrawSignal)
             if (xSemaphoreTake(DrawSignal, portMAX_DELAY) ==
@@ -157,13 +455,14 @@ void vTask1(void *pvParameters)
                 checkDraw(tumDrawClear(White), __FUNCTION__);
                 // tumDrawClear(White);
 
-                // Draw the graphics
+                // Draw the fixed elements
                 drawTheTriangle();
+                drawTheFixedText();
 
                 xSemaphoreGive(ScreenLock);
             }
     }
-}
+} */
 
 int main(int argc, char *argv[])
 {
@@ -192,6 +491,12 @@ int main(int argc, char *argv[])
         goto err_buttons_lock;
     }
 
+    myABCDcounter.lock = xSemaphoreCreateMutex(); // Locking mechanism
+    if (!myABCDcounter.lock) {
+        PRINT_ERROR("Failed to create myABCDcounter lock");
+        goto err_myABCDcounter_lock;
+    }
+
     DrawSignal = xSemaphoreCreateBinary(); // Screen buffer locking
     if (!DrawSignal) {
         PRINT_ERROR("Failed to create draw signal");
@@ -205,7 +510,7 @@ int main(int argc, char *argv[])
 
     if (xTaskCreate(vSwapBuffers, "BufferSwapTask",
                     mainGENERIC_STACK_SIZE * 2, NULL, configMAX_PRIORITIES,
-                    BufferSwap) != pdPASS) {
+                    &BufferSwap) != pdPASS) {
         PRINT_TASK_ERROR("BufferSwapTask");
         goto err_bufferswap;
     }
@@ -215,10 +520,19 @@ int main(int argc, char *argv[])
         goto err_Task1;
     }
 
+    // if (xTaskCreate(vTask2, "Task2", mainGENERIC_STACK_SIZE * 2, NULL,
+    //                 mainGENERIC_PRIORITY, &Task2) != pdPASS) {
+    //     goto err_Task2;
+    // }
+
+    // vTaskSuspend(vTask2);
+
     vTaskStartScheduler();
 
     return EXIT_SUCCESS;
 
+// err_Task2:
+//     vTaskDelete(Task1);
 err_Task1:
     vTaskDelete(BufferSwap);
 err_bufferswap:
@@ -226,6 +540,8 @@ err_bufferswap:
 err_screen_lock:
     vSemaphoreDelete(DrawSignal);
 err_draw_signal:
+    vSemaphoreDelete(myABCDcounter.lock);
+err_myABCDcounter_lock:
     vSemaphoreDelete(buttons.lock);
 err_buttons_lock:
     tumSoundExit();
