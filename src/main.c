@@ -90,6 +90,26 @@ void xGetButtonInput(void)
     }
 }
 
+void vSwapBuffers(void *pvParameters)
+{
+    TickType_t xLastWakeTime;
+    xLastWakeTime = xTaskGetTickCount();
+    const TickType_t frameratePeriod = configTICK_RATE_HZ / FPS;
+
+    tumDrawBindThread(); // Setup Rendering handle with correct GL context
+
+    while (1) {
+        if (xSemaphoreTake(ScreenLock, portMAX_DELAY) == pdTRUE) {
+            tumDrawUpdateScreen();
+            tumEventFetchEvents(FETCH_EVENT_BLOCK);
+            xSemaphoreGive(ScreenLock);
+            xSemaphoreGive(DrawSignal);
+            vTaskDelayUntil(&xLastWakeTime,
+                            pdMS_TO_TICKS(frameratePeriod));
+        }
+    }
+}
+
 void checkDraw(unsigned char status, const char *msg)
 {
     if (status) {
@@ -202,7 +222,8 @@ void drawTheMovingText(TickType_t prevWakeTime)
 
     TickType_t xLastWakeTime = xTaskGetTickCount();
     signed short increment_on_time = (xLastWakeTime - prevWakeTime) / pdMS_TO_TICKS(1);
-    
+    prints("movment:%hd\n", (signed short)(MOVING_TEXT_SPEED * increment_on_time));
+
     if (direction == 'r')
         x += (signed short)(MOVING_TEXT_SPEED * increment_on_time);
     else if (direction == 'l')
@@ -282,65 +303,6 @@ void countTheABCDs(void)
     }
     memcpy(lastButtonsState, readingButtonsState, sizeof(short) * NUMBER_OF_TRACED_BUTTONS);
 }
-/* 
-only for the 100...000-like binary, namely only single "1"
-return -1 when there are more than one "1" in the binary
-int fastLog2(unsigned int num){
-    int round = 0;
-    for (round = 0; num & 0b1 != 1; round++)
-        num >> 1;
-    
-    if (num > 1)
-        return -1;
-    else
-        return round;
-}
-
-void countTheABCDs(void)
-{
-    // from lastFlipTime[0] to lastFlipTime[3] for ABCD
-    static TickType_t lastFlipTime[NUMBER_OF_TRACED_BUTTONS] = { 0 };
-    TickType_t currentTime = xTaskGetTickCount();
-
-    // from left to right stands for ABCD
-    static short lastButtonsState = 0b0000; 
-    static short buttonsState = 0b0000;
-    short readingButtonsState = 0b0000;
-
-    if (xSemaphoreTake(buttons.lock, 0) == pdTRUE) {
-        readingButtonsState = (buttons.buttons[KEYCODE(A)] == BEING_PRESSED) ? 0b1000 : 0 | 
-                              (buttons.buttons[KEYCODE(B)] == BEING_PRESSED) ? 0b0100 : 0 | 
-                              (buttons.buttons[KEYCODE(C)] == BEING_PRESSED) ? 0b0010 : 0 | 
-                              (buttons.buttons[KEYCODE(D)] == BEING_PRESSED) ? 0b0001 : 0 ;
-        xSemaphoreGive(buttons.lock);
-    }
-
-    if (readingButtonsState != lastButtonsState) {
-        unsigned short theChangedButtons = readingButtonsState ^ lastButtonsState;
-        for (int index = NUMBER_OF_TRACED_BUTTONS - 1; 
-            (theChangedButtons > 0) && (index >= 0); 
-            theChangedButtons >> 1) // check the button one by one
-            {
-            if (theChangedButtons & 0b1 == 1)
-                // means the corresponding button state changes
-                lastFlipTime[index] = currentTime;
-            index--;
-        }
-    }
-    short readingStateCheck = 0;
-    short stateCheck = 0;
-    for (int index = NUMBER_OF_TRACED_BUTTONS - 1; index >= 0; index--){
-        if (currentTime - lastFlipTime[index] > DEBOUNCE_DELAY_BY_TICK){
-            readingStateCheck = (0b1 << (NUMBER_OF_TRACED_BUTTONS - 1 - index)) 
-                                & readingButtonsState;
-            stateCheck = (0b1 << (NUMBER_OF_TRACED_BUTTONS - 1 - index)) 
-                                & buttonsState;                
-            if (readingStateCheck != stateCheck )
-            
-        }
-    }
-    lastButtonsState = readingButtonsState;
-} */
 
 void drawButtonCounts(void)
 {
@@ -371,26 +333,6 @@ void drawButtonCounts(void)
     }
 }
 
-void vSwapBuffers(void *pvParameters)
-{
-    TickType_t xLastWakeTime;
-    xLastWakeTime = xTaskGetTickCount();
-    const TickType_t frameratePeriod = configTICK_RATE_HZ / FPS;
-
-    tumDrawBindThread(); // Setup Rendering handle with correct GL context
-
-    while (1) {
-        if (xSemaphoreTake(ScreenLock, portMAX_DELAY) == pdTRUE) {
-            tumDrawUpdateScreen();
-            tumEventFetchEvents(FETCH_EVENT_BLOCK);
-            xSemaphoreGive(ScreenLock);
-            xSemaphoreGive(DrawSignal);
-            vTaskDelayUntil(&xLastWakeTime,
-                            pdMS_TO_TICKS(frameratePeriod));
-        }
-    }
-}
-
 // this task is to draw the static grahics and the static text
 void vTask1(void *pvParameters)
 {
@@ -404,12 +346,9 @@ void vTask1(void *pvParameters)
             if (xSemaphoreTake(DrawSignal, portMAX_DELAY) ==
                 pdTRUE) {
                 xLastWakeTime = xTaskGetTickCount();                
-                tumEventFetchEvents(FETCH_EVENT_BLOCK |
-                                    FETCH_EVENT_NO_GL_CHECK);
+
                 xGetButtonInput(); // Update global input
                 countTheABCDs(); // Update the counter
-
-                xSemaphoreTake(ScreenLock, portMAX_DELAY);
 
                 // Clear screen
                 checkDraw(tumDrawClear(White), __FUNCTION__);
@@ -426,43 +365,10 @@ void vTask1(void *pvParameters)
                 drawTheMovingText(prevWakeTime);
                 drawButtonCounts();
 
-                xSemaphoreGive(ScreenLock);
-
                 prevWakeTime = xLastWakeTime;
             }
     }
 }
-
-/* this task is to draw the moving elements
-void vTask2(void *pvParameters)
-{
-    structure to store time retrieved from Linux kernel
-    static struct timespec the_time;
-    static char our_time_string[100];
-    static int our_time_strings_width = 0;
-    
-    while (1) {
-        if (DrawSignal)
-            if (xSemaphoreTake(DrawSignal, portMAX_DELAY) ==
-                pdTRUE) {
-                tumEventFetchEvents(FETCH_EVENT_BLOCK |
-                                    FETCH_EVENT_NO_GL_CHECK);
-                xGetButtonInput(); // Update global input
-
-                xSemaphoreTake(ScreenLock, portMAX_DELAY);
-
-                // Clear screen
-                checkDraw(tumDrawClear(White), __FUNCTION__);
-                // tumDrawClear(White);
-
-                // Draw the fixed elements
-                drawTheTriangle();
-                drawTheFixedText();
-
-                xSemaphoreGive(ScreenLock);
-            }
-    }
-} */
 
 int main(int argc, char *argv[])
 {
@@ -519,13 +425,6 @@ int main(int argc, char *argv[])
                     mainGENERIC_PRIORITY, &Task1) != pdPASS) {
         goto err_Task1;
     }
-
-    // if (xTaskCreate(vTask2, "Task2", mainGENERIC_STACK_SIZE * 2, NULL,
-    //                 mainGENERIC_PRIORITY, &Task2) != pdPASS) {
-    //     goto err_Task2;
-    // }
-
-    // vTaskSuspend(vTask2);
 
     vTaskStartScheduler();
 
