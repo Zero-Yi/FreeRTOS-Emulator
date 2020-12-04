@@ -10,19 +10,31 @@
 #include "queue.h"
 #include "semphr.h"
 #include "task.h"
+#include "timers.h"
 
 #include "TUM_Ball.h"
 #include "TUM_Draw.h"
+#include "TUM_Font.h"
 #include "TUM_Event.h"
 #include "TUM_Sound.h"
 #include "TUM_Utils.h"
-#include "TUM_Font.h"
+#include "TUM_FreeRTOS_Utils.h"
 #include "TUM_Print.h"
 
 #include "AsyncIO.h"
 
 #define mainGENERIC_PRIORITY (tskIDLE_PRIORITY)
 #define mainGENERIC_STACK_SIZE ((unsigned short)2560)
+
+// state machine betroffen
+#define STATE_QUEUE_LENGTH 1
+#define STATE_COUNT 2
+#define STATE_ONE 0
+#define STATE_TWO 1
+#define NEXT_TASK 0
+#define PREV_TASK 1
+#define STARTING_STATE STATE_ONE
+#define STATE_DEBOUNCE_DELAY 300
 
 #define PI 3.1415926
 // rad per ms
@@ -56,12 +68,32 @@
 
 #define MOVE_WITH_MOUSE 1
 
-static TaskHandle_t Task1 = NULL;
-// static TaskHandle_t Task2 = NULL;
-static TaskHandle_t BufferSwap = NULL;
+#define A_COUNTER_POSITION 0
+#define B_COUNTER_POSITION 1
+#define C_COUNTER_POSITION 2
+#define D_COUNTER_POSITION 3
+#define NUMBER_OF_TRACED_BUTTONS 4
 
+// period in ms
+#define PERIOD_TASK21 1000
+#define PERIOD_TASK22 500
+
+static TaskHandle_t StateMachine = NULL;
+static TaskHandle_t BufferSwap = NULL;
+static TaskHandle_t Task1 = NULL;
+static TaskHandle_t Task21 = NULL;
+static TaskHandle_t Task22 = NULL;
+
+static QueueHandle_t StateQueue = NULL;
 static SemaphoreHandle_t DrawSignal = NULL;
 static SemaphoreHandle_t ScreenLock = NULL;
+static TimerHandle_t Task21Timer = NULL;
+static TimerHandle_t Task22Timer = NULL;
+
+const unsigned char next_state_signal = NEXT_TASK;
+const unsigned char prev_state_signal = PREV_TASK;
+
+void *const pvTimerID = 0;
 
 typedef struct buttons_buffer {
     unsigned char buttons[SDL_NUM_SCANCODES];
@@ -73,12 +105,6 @@ typedef struct ABCDcounter {
     SemaphoreHandle_t lock;
 } ABCDcounter_t;
 
-#define A_COUNTER_POSITION 0
-#define B_COUNTER_POSITION 1
-#define C_COUNTER_POSITION 2
-#define D_COUNTER_POSITION 3
-#define NUMBER_OF_TRACED_BUTTONS 4
-
 static buttons_buffer_t buttons = { 0 };
 static ABCDcounter_t myABCDcounter = { 0 };
 
@@ -87,6 +113,18 @@ void xGetButtonInput(void)
     if (xSemaphoreTake(buttons.lock, 0) == pdTRUE) {
         xQueueReceive(buttonInputQueue, &buttons.buttons, 0);
         xSemaphoreGive(buttons.lock);
+    }
+}
+
+void checkDraw(unsigned char status, const char *msg)
+{
+    if (status) {
+        if (msg)
+            fprints(stderr, "[ERROR] %s, %s\n", msg,
+                    tumGetErrorMessage());
+        else {
+            fprints(stderr, "[ERROR] %s\n", tumGetErrorMessage());
+        }
     }
 }
 
@@ -102,6 +140,7 @@ void vSwapBuffers(void *pvParameters)
         if (xSemaphoreTake(ScreenLock, portMAX_DELAY) == pdTRUE) {
             tumDrawUpdateScreen();
             tumEventFetchEvents(FETCH_EVENT_BLOCK);
+            checkDraw(tumDrawClear(White), __FUNCTION__);
             xSemaphoreGive(ScreenLock);
             xSemaphoreGive(DrawSignal);
             vTaskDelayUntil(&xLastWakeTime,
@@ -110,14 +149,103 @@ void vSwapBuffers(void *pvParameters)
     }
 }
 
-void checkDraw(unsigned char status, const char *msg)
+void changeState(volatile unsigned char *state, unsigned char forwards)
 {
-    if (status) {
-        if (msg)
-            fprints(stderr, "[ERROR] %s, %s\n", msg,
-                    tumGetErrorMessage());
-        else {
-            fprints(stderr, "[ERROR] %s\n", tumGetErrorMessage());
+    switch (forwards) {
+        case NEXT_TASK:
+            if (*state == STATE_COUNT - 1) {
+                *state = 0;
+            }
+            else {
+                (*state)++;
+            }
+            break;
+        case PREV_TASK:
+            if (*state == 0) {
+                *state = STATE_COUNT - 1;
+            }
+            else {
+                (*state)--;
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+static int vCheckStateInput(void)
+{
+    if (xSemaphoreTake(buttons.lock, 0) == pdTRUE) {
+        if (buttons.buttons[KEYCODE(E)]) {
+            buttons.buttons[KEYCODE(E)] = 0;
+            if (StateQueue) {
+                xSemaphoreGive(buttons.lock);
+                xQueueSend(StateQueue, &next_state_signal, 0);
+                // prints("E pressed\n");
+                return 0;
+            }
+            xSemaphoreGive(buttons.lock);
+            return -1;
+        }
+        xSemaphoreGive(buttons.lock);
+    }
+    return 0;
+}
+
+/*
+ * Example basic state machine with sequential states
+ */
+void basicSequentialStateMachine(void *pvParameters)
+{
+    unsigned char current_state = STARTING_STATE; // Default state
+    unsigned char state_changed =
+        1; // Only re-evaluate state if it has changed
+    unsigned char input = 0;
+
+    const int state_change_period = STATE_DEBOUNCE_DELAY;
+
+    TickType_t last_change = xTaskGetTickCount();
+
+    while (1) {
+        if (state_changed) {
+            goto initial_state;
+        }
+
+        // Handle state machine input
+        if (StateQueue)
+            if (xQueueReceive(StateQueue, &input, portMAX_DELAY) ==
+                pdTRUE)
+                if (xTaskGetTickCount() - last_change >
+                    state_change_period) {
+                    changeState(&current_state, input);
+                    state_changed = 1;
+                    last_change = xTaskGetTickCount();
+                }
+
+initial_state:
+        // Handle current state
+        if (state_changed) {
+            switch (current_state) {
+                case STATE_ONE:
+                        vTaskSuspend(Task21);
+                        vTaskSuspend(Task22);
+                        vTaskResume(Task1);
+                        xTimerStop(Task21Timer, portMAX_DELAY);
+                        xTimerStop(Task22Timer, portMAX_DELAY);
+                        prints("Change to state 1\n");
+                    break;
+                case STATE_TWO:
+                        vTaskSuspend(Task1);
+                        vTaskResume(Task21);
+                        vTaskResume(Task22);
+                        xTimerStart(Task21Timer, portMAX_DELAY);
+                        xTimerStart(Task22Timer, portMAX_DELAY);
+                        prints("Change to state 2\n");
+                    break;
+                default:
+                    break;
+            }
+            state_changed = 0;
         }
     }
 }
@@ -155,7 +283,6 @@ void drawTheTriangle(void)
                                     
     checkDraw(tumDrawTriangle(points, TUMBlue),
              __FUNCTION__);
-    // tumDrawTriangle(points, TUMBlue);
 }
 
 void drawTheCircle(TickType_t initialWakeTime)
@@ -221,9 +348,9 @@ void drawTheMovingText(TickType_t prevWakeTime)
     static char direction = 'r';
 
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    signed short increment_on_time = (xLastWakeTime - prevWakeTime) / pdMS_TO_TICKS(1);
-    prints("movment:%hd\n", (signed short)(MOVING_TEXT_SPEED * increment_on_time));
-
+    signed short increment_on_time = 1000 * (xLastWakeTime - prevWakeTime) / (float)configTICK_RATE_HZ;
+    // prints("movment:%hd\n", (signed short)(MOVING_TEXT_SPEED * increment_on_time));
+    
     if (direction == 'r')
         x += (signed short)(MOVING_TEXT_SPEED * increment_on_time);
     else if (direction == 'l')
@@ -333,26 +460,25 @@ void drawButtonCounts(void)
     }
 }
 
-// this task is to draw the static grahics and the static text
+// this task is do the exercise2
 void vTask1(void *pvParameters)
 {
-    TickType_t xLastWakeTime, prevWakeTime, initialWakeTime;
+    TickType_t lastWakeTime, prevWakeTime, initialWakeTime;
     initialWakeTime = xTaskGetTickCount();
-    xLastWakeTime = initialWakeTime;
-    prevWakeTime = xLastWakeTime;
+    lastWakeTime = initialWakeTime;
+    prevWakeTime = lastWakeTime;
 
     while (1) {
         if (DrawSignal)
             if (xSemaphoreTake(DrawSignal, portMAX_DELAY) ==
                 pdTRUE) {
-                xLastWakeTime = xTaskGetTickCount();                
+                lastWakeTime = xTaskGetTickCount();                
 
                 xGetButtonInput(); // Update global input
                 countTheABCDs(); // Update the counter
 
                 // Clear screen
-                checkDraw(tumDrawClear(White), __FUNCTION__);
-                // tumDrawClear(White);
+                // checkDraw(tumDrawClear(White), __FUNCTION__);
 
                 // Draw the fixed elements
                 drawTheTriangle();
@@ -365,7 +491,93 @@ void vTask1(void *pvParameters)
                 drawTheMovingText(prevWakeTime);
                 drawButtonCounts();
 
-                prevWakeTime = xLastWakeTime;
+                vCheckStateInput();
+
+                prevWakeTime = lastWakeTime;
+            }
+    }
+}
+
+void vTask21TimerCallback( TimerHandle_t xTimer )
+{
+    xTaskNotifyGive(Task21);
+    // prints("task21 timer expires!\n");
+}
+
+void vTask22TimerCallback( TimerHandle_t xTimer )
+{
+    xTaskNotifyGive(Task22);
+    // prints("task22 timer expires!\n");
+}
+
+#define Task21Circle_X SCREEN_WIDTH / 4
+#define Task21Circle_Y SCREEN_HEIGHT / 2
+#define Task22Circle_X SCREEN_WIDTH / 4 * 3
+#define Task22Circle_Y SCREEN_HEIGHT / 2
+#define Task2Circle_Radius 20
+
+short flagToggle(unsigned short *flag)
+{
+    if ( *flag > 1)
+        return -1;
+    else if( *flag == 1 )
+        *flag = 0;
+    else // means *flag = 0
+        *flag = 1;
+    return 0;
+}
+
+void vTask21(void *pvParameters)
+{
+    static unsigned short flag = 0;
+    u_int32_t notificationValue = 0;
+
+    while (1) {
+        if (DrawSignal){
+            notificationValue = ulTaskNotifyTake(pdTRUE, 0);
+            // prints("notificationValue: %d\n", notificationValue);
+            if ( notificationValue > 0 ) // check the toggle singal
+            {
+                if( flagToggle(&flag) == -1)
+                    prints("Error! Task21 toggle flag not 1 or 0\n");
+                prints("state toggled! now: %hd\n", flag);
+            }
+
+            if (xSemaphoreTake(DrawSignal, portMAX_DELAY) ==
+                pdTRUE) {
+                xGetButtonInput(); // Update agency
+
+                if (flag == 1){ // on drawing phase
+                    checkDraw(tumDrawCircle(Task21Circle_X, Task21Circle_Y, 
+                                        Task2Circle_Radius, Orange), __FUNCTION__);
+                    prints("Draw!\n");
+                }
+
+                vCheckStateInput();
+            }
+        }
+    }
+}
+
+void vTask22(void *pvParameters)
+{
+    static unsigned short flag = 0;
+
+    while (1) {
+        if (DrawSignal)
+            if ( ulTaskNotifyTake(pdTRUE, 0) > 0 ) // check the toggle singal
+                if( flagToggle(&flag) == -1)
+                    prints("Error! Task22 toggle flag not 1 or 0\n");
+
+            if (xSemaphoreTake(DrawSignal, portMAX_DELAY) ==
+                pdTRUE) {
+                xGetButtonInput(); // Update agency
+                
+                if (flag == 1) // on drawing phase
+                    checkDraw(tumDrawCircle(Task22Circle_X, Task22Circle_Y, 
+                                        Task2Circle_Radius, Orange), __FUNCTION__);
+                                    
+                vCheckStateInput();
             }
     }
 }
@@ -408,14 +620,42 @@ int main(int argc, char *argv[])
         PRINT_ERROR("Failed to create draw signal");
         goto err_draw_signal;
     }
+
     ScreenLock = xSemaphoreCreateMutex();
     if (!ScreenLock) {
         PRINT_ERROR("Failed to create screen lock");
         goto err_screen_lock;
     }
 
+    StateQueue = xQueueCreate(STATE_QUEUE_LENGTH, sizeof(unsigned char));
+    if (!StateQueue) {
+        PRINT_ERROR("Could not open state queue");
+        goto err_state_queue;
+    }
+
+    Task21Timer = xTimerCreate('Task21timer', PERIOD_TASK21 / portTICK_PERIOD_MS / 2,
+                                pdTRUE, pvTimerID, vTask21TimerCallback);
+    if (!Task21Timer) {
+        PRINT_ERROR("Could not create tast21 timer");
+        goto err_task21_timer;
+    }
+
+    Task22Timer = xTimerCreate('Task22timer', pdMS_TO_TICKS(PERIOD_TASK22 / 2),
+                                pdTRUE, pvTimerID, vTask22TimerCallback);
+    if (!Task22Timer) {
+        PRINT_ERROR("Could not create task22 timer");
+        goto err_task22_timer;
+    }
+
+    if (xTaskCreate(basicSequentialStateMachine, "StateMachine",
+                    mainGENERIC_STACK_SIZE * 2, NULL,
+                    configMAX_PRIORITIES - 2, &StateMachine) != pdPASS) {
+        PRINT_TASK_ERROR("StateMachine");
+        goto err_statemachine;
+    }
+
     if (xTaskCreate(vSwapBuffers, "BufferSwapTask",
-                    mainGENERIC_STACK_SIZE * 2, NULL, configMAX_PRIORITIES,
+                    mainGENERIC_STACK_SIZE * 2, NULL, configMAX_PRIORITIES - 1,
                     &BufferSwap) != pdPASS) {
         PRINT_TASK_ERROR("BufferSwapTask");
         goto err_bufferswap;
@@ -426,15 +666,41 @@ int main(int argc, char *argv[])
         goto err_Task1;
     }
 
+    if (xTaskCreate(vTask21, "Task21", mainGENERIC_STACK_SIZE * 2, NULL,
+                    mainGENERIC_PRIORITY, &Task21) != pdPASS) {
+        goto err_Task21;
+    }
+
+    if (xTaskCreate(vTask22, "Task22", mainGENERIC_STACK_SIZE * 2, NULL,
+                    mainGENERIC_PRIORITY, &Task22) != pdPASS) {
+        goto err_Task22;
+    }
+
+    vTaskSuspend(Task1);
+    vTaskSuspend(Task21);
+    vTaskSuspend(Task22);
+
+    tumFUtilPrintTaskStateList();
+
     vTaskStartScheduler();
 
     return EXIT_SUCCESS;
 
-// err_Task2:
-//     vTaskDelete(Task1);
+err_Task22:
+    vTaskDelete(Task21);
+err_Task21:
+    vTaskDelete(Task1);
 err_Task1:
     vTaskDelete(BufferSwap);
 err_bufferswap:
+    vTaskDelete(StateMachine);
+err_statemachine:
+    xTimerDelete(Task22Timer, 0); 
+err_task22_timer:
+    xTimerDelete(Task21Timer, 0);
+err_task21_timer:
+    vQueueDelete(StateQueue);
+err_state_queue:
     vSemaphoreDelete(ScreenLock);
 err_screen_lock:
     vSemaphoreDelete(DrawSignal);
