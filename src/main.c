@@ -29,11 +29,12 @@
 
 // state machine betroffen
 #define STATE_QUEUE_LENGTH  1
-#define STATE_COUNT         4
+#define STATE_COUNT         5
 #define STATE_ONE           0
 #define STATE_TWO           1
 #define STATE_THREE         2
 #define STATE_FOUR          3
+#define STATE_FIVE          4
 #define NEXT_TASK           0
 #define PREV_TASK           1
 #define STARTING_STATE      STATE_ONE
@@ -81,6 +82,10 @@
 #define BIT_8 ( 1U << 8U )
 #define BIT_9 ( 1U << 9U )
 #define BIT_10 ( 1U << 10U )
+#define BIT_11 ( 1U << 11U )
+#define BIT_12 ( 1U << 12U )
+#define BIT_13 ( 1U << 13U )
+#define BIT_14 ( 1U << 14U )
 
 #define MOVE_WITH_MOUSE 1
 
@@ -120,6 +125,14 @@ static TimerHandle_t Task22Timer = NULL;
 static TaskHandle_t Task23 = NULL;
 static TaskHandle_t Task23aux = NULL;
 
+static TaskHandle_t Task31 = NULL;
+static TaskHandle_t Task32 = NULL;
+static TaskHandle_t Task33 = NULL;
+static TaskHandle_t Task34 = NULL;
+static TaskHandle_t Task3output = NULL;
+// static SemaphoreHandle_t Task32BinSema = NULL;
+const unsigned short Task3TickPeriod = 15;
+
 static StackType_t xStack[ STATIC_TASK211_STACKSIZE ];
 static EventGroupHandle_t myEventGroup = NULL;
 static EventGroupHandle_t stateChangingSync = NULL;
@@ -150,10 +163,27 @@ typedef struct Task23counter {
     SemaphoreHandle_t lock;
 } Task23counter_t;
 
+// 2-dimension linked list for Task3 group
+typedef struct subnode{
+    char task[10];
+    struct subnode *next;
+} subnode_t;
+
+typedef struct infoMainnode{
+    unsigned short tick;
+    subnode_t *subnodeHead;
+} infoMainnode_t;
+
+typedef struct Mainnode{
+    infoMainnode_t info;
+    struct Mainnode *next;
+} Mainnode_t;
+
 static buttons_buffer_t buttons = { 0 };
 static state_global_t state = {STARTING_STATE, 0, NULL};
 static ABCDcounter_t myABCDcounter = { 0 };
-static Task23counter_t task23counter = {0, NULL };
+static Task23counter_t task23counter = {0, NULL};
+Mainnode_t task3head = { 0 };
 
 void vApplicationGetIdleTaskMemory( StaticTask_t **ppxIdleTaskTCBBuffer,
                                     StackType_t **ppxIdleTaskStackBuffer,
@@ -221,7 +251,7 @@ void vSwapBuffers(void *pvParameters)
             checkDraw(tumDrawClear(White), __FUNCTION__);
             xSemaphoreGive(ScreenLock);
 
-            switch (current_state){
+            switch (current_state){ // for different task combination use different bit
                 case STATE_ONE:
                     xSemaphoreGive(DrawSignal);
                     break;
@@ -233,6 +263,9 @@ void vSwapBuffers(void *pvParameters)
                     break;            
                 case STATE_FOUR:
                     xEventGroupSetBits(myEventGroup, BIT_4);                        
+                    break;
+                case STATE_FIVE:
+                    xEventGroupSetBits(myEventGroup, BIT_5);   
                     break;
                 default:
                     break;
@@ -347,6 +380,9 @@ void basicSequentialStateMachine(void *pvParameters)
                     case STATE_FOUR:
                         bitToWait = BIT_8|BIT_9;
                         break;
+                    case STATE_FIVE:
+                        bitToWait = BIT_14;
+                        break;                        
                     default:
                         break;
                     }
@@ -382,6 +418,8 @@ void basicSequentialStateMachine(void *pvParameters)
 
                         vTaskSuspend(Task23);
                         vTaskSuspend(Task23aux);
+
+                        vTaskSuspend(Task3output);
                         prints("Change to state 1\n");
                     break;
                 case STATE_TWO:
@@ -399,6 +437,8 @@ void basicSequentialStateMachine(void *pvParameters)
 
                         vTaskSuspend(Task23);
                         vTaskSuspend(Task23aux);
+
+                        vTaskSuspend(Task3output);
                         prints("Change to state 2\n");
                     break;
                 case STATE_THREE:
@@ -416,6 +456,8 @@ void basicSequentialStateMachine(void *pvParameters)
 
                         vTaskSuspend(Task23);
                         vTaskSuspend(Task23aux);
+
+                        vTaskSuspend(Task3output);
                         prints("Change to state 3\n");
                     break;                    
                 case STATE_FOUR:
@@ -433,8 +475,29 @@ void basicSequentialStateMachine(void *pvParameters)
 
                         // vTaskResume(Task23);
                         vTaskResume(Task23aux);
+
+                        vTaskSuspend(Task3output);
                         prints("Change to state 4\n");
                     break;
+                case STATE_FIVE:
+                        vTaskSuspend(Task1);
+
+                        vTaskSuspend(Task211);
+                        vTaskSuspend(Task212);
+                        xTimerStop(Task211Timer, portMAX_DELAY);
+                        xTimerStop(Task212Timer, portMAX_DELAY);
+
+                        vTaskSuspend(Task221);
+                        vTaskSuspend(Task222);
+                        vTaskSuspend(Task22aux);        
+                        xTimerStop(Task22Timer, portMAX_DELAY);       
+
+                        vTaskSuspend(Task23);
+                        vTaskSuspend(Task23aux);
+
+                        vTaskResume(Task3output);
+                        prints("Change to state 5\n");
+                    break;                    
                 default:
                     break;
             }
@@ -1067,6 +1130,193 @@ void vTask23aux(void *pvParameters)
 
 }
 
+void vTask31(void *pvParameters)
+{
+    unsigned short currentTick = 0;
+    Mainnode_t *currentMainnode = &task3head;
+    subnode_t *currentSubnode = NULL;
+
+    while(1){
+        currentTick++;
+        currentMainnode = currentMainnode->next;
+        currentSubnode = currentMainnode->info.subnodeHead;
+
+        while(currentSubnode->next != NULL) // add to the end of sub linked list
+            currentSubnode = currentSubnode->next;
+
+        currentSubnode->next = (subnode_t *)calloc(1, sizeof(subnode_t));
+        sprintf(currentSubnode->next->task, "1");
+        currentSubnode->next->next = NULL;
+
+        if(currentTick == Task3TickPeriod){
+            xEventGroupSetBits(myEventGroup, BIT_8);            
+            vTaskSuspend(NULL);
+        }
+        
+        vTaskDelay(1);
+    }
+}
+
+void vTask32(void *pvParameters)
+{
+    unsigned short currentTick = 0;
+    Mainnode_t *currentMainnode = &task3head;
+    subnode_t *currentSubnode = NULL;
+
+    while(1){
+        currentTick++;
+        currentMainnode = currentMainnode->next;
+        currentSubnode = currentMainnode->info.subnodeHead;
+
+        if ((currentTick & 0b1) == 0){
+            // means current tick is even
+            while(currentSubnode->next != NULL) // add to the end
+                currentSubnode = currentSubnode->next;
+
+            currentSubnode->next = (subnode_t *)calloc(1, sizeof(subnode_t));
+            sprintf(currentSubnode->next->task, "2");
+            currentSubnode->next->next = NULL;
+
+            // xSemaphoreGive(Task32BinSema);
+            xTaskNotify(Task33, currentTick, eSetValueWithOverwrite);
+            // wake Task33 to print
+        }
+
+        if(currentTick == Task3TickPeriod){
+            xEventGroupSetBits(myEventGroup, BIT_9);
+            vTaskSuspend(NULL);
+        }
+        
+        vTaskDelay(1);
+    }
+}
+
+void vTask33(void *pvParameters)
+{
+    uint32_t currentTick = 0;
+    Mainnode_t *currentMainnode = &task3head;
+    subnode_t *currentSubnode = NULL;
+
+    while(1){
+        // xSemaphoreTake(Task32BinSema, portMAX_DELAY);
+        xTaskNotifyWait(0, 0, &currentTick, portMAX_DELAY);
+
+        // reset the currentMainnode
+        currentMainnode = &task3head;
+
+        for (int i = 0; i < currentTick; i ++)
+            // find the mainnode for current tick
+            currentMainnode = currentMainnode->next;
+        // set currentSubnode as the head node of the sub linked list
+        currentSubnode = currentMainnode->info.subnodeHead;
+        
+        while(currentSubnode->next != NULL) // add to the end
+            currentSubnode = currentSubnode->next;
+
+        currentSubnode->next = (subnode_t *)calloc(1, sizeof(subnode_t));
+        sprintf(currentSubnode->next->task, "3");
+        currentSubnode->next->next = NULL;
+    }
+}
+
+void vTask34(void *pvParameters)
+{
+    unsigned short currentTick = 0;
+    Mainnode_t *currentMainnode = &task3head;
+    subnode_t *currentSubnode = NULL;
+
+    while(1){
+        currentTick++;
+        currentMainnode = currentMainnode->next;
+        currentSubnode = currentMainnode->info.subnodeHead;
+
+        if ((currentTick & 0b11) == 0){
+            // means current tick is multiples of 4
+            while(currentSubnode->next != NULL)
+                currentSubnode = currentSubnode->next;
+
+            currentSubnode->next = (subnode_t *)calloc(1, sizeof(subnode_t));
+            sprintf(currentSubnode->next->task, "4");
+            currentSubnode->next->next = NULL;
+        }
+
+        if(currentTick == Task3TickPeriod){
+            xEventGroupSetBits(myEventGroup, BIT_11);
+            vTaskSuspend(NULL);
+        }
+        
+        vTaskDelay(1);
+    }
+}
+
+void vTask3output(void *pvParameters)
+{
+    Mainnode_t *currentMainnode = &task3head;
+    subnode_t *currentSubnode;
+    char str[50] = { 0 };
+    // int text_width;
+    
+    for (unsigned short i = 1; i <= Task3TickPeriod; i++){
+        // initiate the mainnode list and the head of subnode list
+        currentMainnode->next = (Mainnode_t *)calloc(1, sizeof(Mainnode_t));
+        currentMainnode->next->info.tick = i;
+        currentMainnode->next->info.subnodeHead = (subnode_t *)calloc(1, sizeof(subnode_t));
+        sprintf(currentMainnode->next->info.subnodeHead->task, "head");
+        currentMainnode->next->info.subnodeHead->next = NULL;
+        currentMainnode->next->next = NULL;
+        // move to the next mainnode
+        currentMainnode = currentMainnode->next;
+    }
+
+    // initiation finished, wake the other tasks
+    vTaskResume(Task31);
+    vTaskResume(Task32);
+    vTaskResume(Task34);
+
+     // wait for the other tasks to fill the linked list
+    xEventGroupWaitBits(myEventGroup, BIT_8|BIT_9|BIT_11, 
+                            pdTRUE, pdTRUE, portMAX_DELAY);
+
+    while(1){
+        xEventGroupWaitBits(myEventGroup, BIT_5, pdTRUE, pdTRUE, portMAX_DELAY);
+        xGetButtonInput(); // Update agency
+
+        // now output the result on the screen
+        for(currentMainnode = &task3head; currentMainnode->next != NULL; ){
+            currentMainnode = currentMainnode->next;
+
+            // output the tick of this sublist
+            sprintf(str, "Tick%hd:", currentMainnode->info.tick);
+
+            for(currentSubnode = currentMainnode->info.subnodeHead;
+                currentSubnode->next != NULL; ){
+                    // put the task code in the end of str in turn
+                    currentSubnode = currentSubnode->next;
+                    strcat(str, currentSubnode->task);
+                }
+
+            // output one line
+            checkDraw(tumDrawText(str, 
+                                100,
+                                DEFAULT_FONT_SIZE * currentMainnode->info.tick,
+                                Fuchsia), __FUNCTION__);                
+        }
+
+        vCheckStateInput();
+
+        xSemaphoreTake(state.lock, 0);
+        if( state.state_changing_signal == STATE_CHANGING){
+            xSemaphoreGive(state.lock);
+
+            // sync point
+            xEventGroupSync(stateChangingSync, BIT_14, 
+                            BIT_1|BIT_14, portMAX_DELAY);
+        }
+        else   
+            xSemaphoreGive(state.lock);        
+    }
+}
+
 int main(int argc, char *argv[])
 {
     char *bin_folder_path = tumUtilGetBinFolderPath(argv[0]);
@@ -1129,6 +1379,12 @@ int main(int argc, char *argv[])
         PRINT_ERROR("Failed to create Task221BinSema");
         goto err_Task221BinSema;
     }
+
+    // Task32BinSema = xSemaphoreCreateBinary();
+    // if (!Task32BinSema) {
+    //     PRINT_ERROR("Failed to create Task32BinSema");
+    //     goto err_Task32BinSema;
+    // }    
 
     StateQueue = xQueueCreate(STATE_QUEUE_LENGTH, sizeof(unsigned char));
     if (!StateQueue) {
@@ -1237,6 +1493,36 @@ int main(int argc, char *argv[])
         goto err_Task23aux;
     }
 
+    if (xTaskCreate(vTask31, "Task31", mainGENERIC_STACK_SIZE * 2, NULL,
+                    mainGENERIC_PRIORITY , &Task31) != pdPASS) {
+        PRINT_TASK_ERROR("Task31");
+        goto err_Task31;
+    }
+
+    if (xTaskCreate(vTask32, "Task32", mainGENERIC_STACK_SIZE * 2, NULL,
+                    mainGENERIC_PRIORITY , &Task32) != pdPASS) {
+        PRINT_TASK_ERROR("Task32");
+        goto err_Task32;
+    }
+
+    if (xTaskCreate(vTask33, "Task33", mainGENERIC_STACK_SIZE * 2, NULL,
+                    mainGENERIC_PRIORITY , &Task33) != pdPASS) {
+        PRINT_TASK_ERROR("Task33");
+        goto err_Task33;
+    }
+
+    if (xTaskCreate(vTask34, "Task34", mainGENERIC_STACK_SIZE * 2, NULL,
+                    mainGENERIC_PRIORITY , &Task34) != pdPASS) {
+        PRINT_TASK_ERROR("Task34");
+        goto err_Task34;
+    }
+
+    if (xTaskCreate(vTask3output, "Task3output", mainGENERIC_STACK_SIZE * 2, NULL,
+                    mainGENERIC_PRIORITY + 4, &Task3output) != pdPASS) {
+        PRINT_TASK_ERROR("Task3output");
+        goto err_Task3output;
+    }
+
     vTaskSuspend(Task1);
     vTaskSuspend(Task211);
     vTaskSuspend(Task212);
@@ -1245,6 +1531,11 @@ int main(int argc, char *argv[])
     vTaskSuspend(Task22aux);    
     vTaskSuspend(Task23);
     vTaskSuspend(Task23aux);
+    vTaskSuspend(Task31);
+    vTaskSuspend(Task32);
+    // vTaskSuspend(Task33);
+    vTaskSuspend(Task34);
+    vTaskSuspend(Task3output);
 
     tumFUtilPrintTaskStateList();
 
@@ -1252,6 +1543,16 @@ int main(int argc, char *argv[])
 
     return EXIT_SUCCESS;
 
+err_Task3output:
+    vTaskDelete(Task34);
+err_Task34:
+    vTaskDelete(Task33);
+err_Task33:
+    vTaskDelete(Task32);
+err_Task32:
+    vTaskDelete(Task31);
+err_Task31:
+    vTaskDelete(Task23aux);
 err_Task23aux:
     vTaskDelete(Task23);
 err_Task23:
@@ -1283,6 +1584,8 @@ err_stateChangingSync:
 err_event_group:
     vQueueDelete(StateQueue);
 err_state_queue:
+//     vSemaphoreDelete(Task32BinSema);
+// err_Task32BinSema:
     vSemaphoreDelete(Task221BinSema);
 err_Task221BinSema:
     vSemaphoreDelete(ScreenLock);
