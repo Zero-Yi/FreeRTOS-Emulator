@@ -42,10 +42,18 @@ The output would be perfectly consistent with the priority, as long as the tasks
 
 If the tasks have the same priority, then the order should be **almost consistent with the order the tasks are resumed**, which is 1, 2 then 4. Note that 3 should be waked by 2, so 3 is the last one to resume. But they have the same priority and they all call delay function, so the sequence might change more and more probably along with the programm running because of some random possibility.
 
-# Log
+# Some notes
 
-## 6. Dec
- Arriving exercise 3.3
+## Screens
+For each sub-exercises in Exercises 3 I created one screen of solution.
+
+## 3.3.2
+I think it would not be reasonable to restrict every task within one tick. Even though we can use such as a combination of interrupts and timer to insure a task be scheduled once every tick, we cannot force but 'pray' that the task runs through within one tick. To 'restrict' a task within one tick, it seems be more relevant with improvement on hardware and counting on a light requirement.
+
+# Others
+
+Something may help in comprehension if a thorough check of codes is expected.
+
 
 ### sync event group
  Brockdown become more and more freuquent, try to use xEventGroupSync() to make a sync point before the state changing, so that all the lock would be sure to get returned and all the tasks get into the next state orderly.
@@ -72,8 +80,6 @@ If the tasks have the same priority, then the order should be **almost consisten
  |...|...|...|...|
 
  when 15 tick have finished, then Task3output starts to print out, by walking through the linked list to get the information.
-
- ## 7. Dec
 
  ### Change in 3.2.2
  In my implementation I choose to use the task notification instead of a binary semaphore, because I need to send a value as well as the signal.
