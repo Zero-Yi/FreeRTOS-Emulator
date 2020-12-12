@@ -1,6 +1,7 @@
 # Buttons
 ## exercise 2
 `A, B, C, D` press to make the corresponding counter increase
+
 `left mouse button` click to reset the counters
 
 ## exercise 3.2.1
@@ -11,6 +12,35 @@
 
 ## exercise 3.2.4
 `P` press to pause the counting down
+
+# Answers
+## 2.3.1 Make yourself familiar with the mouse interface. How does the mouse guarantee thread-safe functionality?
+
+Via Mutex is the thread-safe functionality guaranteed. The relatve codes are already showed in the Lectures_RTOS.pdf.
+
+the structure "mouse" plays a role like an agency. It obtains the newest location of the mouse from SDL_Event, lock the values with a Mutex and any other function/task should only get the location of mouse from the agency, unter the rule of mutex. 
+
+Now that the API from SDL_Event is without a lock and therefore may cause compitition over the resources, an agency with a lock could be created to ensure the thread-safe functionality.
+
+## 3.1 What is the kernel tick? What is a tickless kernel?
+
+In terms of functionality is the kernel tick a measure of time. In terms of implement is the kernel tick some kind of periodically triggered interrupt, in which certain actions are to execute, such as scheduling of tasks and the tick hook function.
+
+Obviously, the frequently triggered interrupt "tick" requires plenty of resources and energy, and as a result is not worthwhile when no tasks but the idle task is running. Therefore, a tickless kernel could be used. In this mode, "the FreeRTOS tickless idle mode stops the periodic tick interrupt during idle periods (periods when there are no application tasks that are able to execute), then makes a correcting adjustment to the RTOS tick count value when the tick interrupt is restarted."(https://www.freertos.org/low-power-tickless-rtos.html) So the system is able to run in a low-power state.
+
+## 3.2.2.5 Experiment with the task stack size. What happens if it is too low?
+
+Interesting, because it seems the task, whose stack is statically allocated, doesn’t use any of the stack space, even if I have defined some local variables.
+
+If I allocate the minimum(here as configMINIMAL_STACK_SIZE, and it is equal to 4) at the moment I create the task, than the water mark during the running will be printed as 4. Even if I allocate 0, the printed water mark would also become 0, but without any visible disturb to the correct result.
+
+So I guess, maybe FreeROTS has some measures, which can automatically prevent a certain degree of damage from a stackoverflow?
+
+## 3.3.3 Scheduling Insights
+
+The output would be perfectly consistent with the priority, as long as the tasks have different priority.
+
+If the tasks have the same priority, then the order should be **almost consistent with the order the tasks are resumed**, which is 1, 2 then 4. Note that 3 should be waked by 2, so 3 is the last one to resume. But they have the same priority and they all call delay function, so the sequence might change more and more probably along with the programm running because of some random possibility.
 
 # Log
 
