@@ -1137,6 +1137,7 @@ void vTask31(void *pvParameters)
     subnode_t *currentSubnode = NULL;
 
     while(1){
+        prints("tick number by task31:%d\n", xTaskGetTickCount());
         currentTick++;
         currentMainnode = currentMainnode->next;
         currentSubnode = currentMainnode->info.subnodeHead;
@@ -1273,9 +1274,13 @@ void vTask3output(void *pvParameters)
     vTaskResume(Task32);
     vTaskResume(Task34);
 
+    prints("before, the tick number is: %d\n", xTaskGetTickCount());
+
      // wait for the other tasks to fill the linked list
     xEventGroupWaitBits(myEventGroup, BIT_8|BIT_9|BIT_11, 
                             pdTRUE, pdTRUE, portMAX_DELAY);
+    
+    prints("after, the tick number is: %d\n", xTaskGetTickCount());
 
     while(1){
         xEventGroupWaitBits(myEventGroup, BIT_5, pdTRUE, pdTRUE, portMAX_DELAY);
@@ -1500,19 +1505,19 @@ int main(int argc, char *argv[])
     }
 
     if (xTaskCreate(vTask32, "Task32", mainGENERIC_STACK_SIZE * 2, NULL,
-                    mainGENERIC_PRIORITY , &Task32) != pdPASS) {
+                    mainGENERIC_PRIORITY + 1, &Task32) != pdPASS) {
         PRINT_TASK_ERROR("Task32");
         goto err_Task32;
     }
 
     if (xTaskCreate(vTask33, "Task33", mainGENERIC_STACK_SIZE * 2, NULL,
-                    mainGENERIC_PRIORITY , &Task33) != pdPASS) {
+                    mainGENERIC_PRIORITY + 2, &Task33) != pdPASS) {
         PRINT_TASK_ERROR("Task33");
         goto err_Task33;
     }
 
     if (xTaskCreate(vTask34, "Task34", mainGENERIC_STACK_SIZE * 2, NULL,
-                    mainGENERIC_PRIORITY , &Task34) != pdPASS) {
+                    mainGENERIC_PRIORITY + 3, &Task34) != pdPASS) {
         PRINT_TASK_ERROR("Task34");
         goto err_Task34;
     }
